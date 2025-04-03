@@ -1,169 +1,106 @@
-"use client";
-
-import { useState, useEffect } from "react";
+"use client"; 
+import { useState } from "react";
 import { ethers } from "ethers";
-import contractABI from "../contract_data/GetSet.json";
-import contractAddress from "../contract_data/GetSet-address.json";
+import axios from "axios";
+import { create as ipfsHttpClient } from "ipfs-http-client";
+import NFTMarketPlace from "../../artifacts/contracts/NFTMarketPlace.sol/NFTMarketPlace.json";
 
-export default function Page() {
-  const [value, setValue] = useState(""); 
-  const [retrievedValue, setRetrievedValue] = useState(null);
-  const [account, setAccount] = useState(null);
-  const [provider, setProvider] = useState(null);
-  const [signer, setSigner] = useState(null);
-  const [contract, setContract] = useState(null);
-  const [depositAmount, setDepositAmount] = useState("");
-  const [userBalance, setUserBalance] = useState(null);
 
-  // Initialize Provider, Signer, and Contract
-  const initializeEthers = async () => {
-    if (!window.ethereum) {
-      alert("MetaMask not detected!");
-      return;
-    }
-    
+const contractAddress = "0x2624B928030f0Be53b68325272cB24a9562B01B6";
+const client = ipfsHttpClient("https://api.pinata.cloud/pinning/pinFileToIPFS");
+const PINATA_KEY = "6afd985e4170c0836a36";
+const SECRET_API = "a84f0cbe6f1de3c0b1634bb762187a9dbed93ce8f4ec0e0341687ae60a41f37d";
+
+export default function CreateNFT() {
+  const [fileUrl, setFileUrl] = useState(null);
+  const [formInput, setFormInput] = useState({
+    name: "",
+    description: "",
+    price: "",
+    category: "Artwork",
+  });
+
+  async function onChange(e) {
+    const file = e.target.files[0];
     try {
-      const _provider = new ethers.BrowserProvider(window.ethereum);
-      const _signer = await _provider.getSigner();
-      const _contract = new ethers.Contract(contractAddress.address, contractABI.abi, _signer);
-
-      setProvider(_provider);
-      setSigner(_signer);
-      setContract(_contract);
-
-      const accounts = await _provider.send("eth_requestAccounts", []);
-      setAccount(accounts[0]);
-    } catch (error) {
-      console.error("Error initializing ethers:", error);
-    }
-  };
-
-  // Set value in contract
-  const setContractValue = async () => {
-    if (!contract) return alert("Please connect wallet first!");
-    try {
-      const tx = await contract.set(BigInt(value)); // Convert string to BigInt
-      await tx.wait(); // Wait for transaction confirmation
-      alert("Value set successfully!");
-    } catch (error) {
-      console.error("Error setting value:", error);
-    }
-  };
-
-  // Get value from contract
-  const getContractValue = async () => {
-    if (!contract) return alert("Please connect wallet first!");
-    try {
-      const result = await contract.get();
-      setRetrievedValue(result.toString());
-    } catch (error) {
-      console.error("Error getting value:", error);
-    }
-  };
-
-  // Deposit funds to the contract
-  const depositFunds = async () => {
-    if (!contract) return alert("Please connect wallet first!");
-    try {
-      const tx = await signer.sendTransaction({
-        to: contractAddress.address,
-        value: ethers.parseEther(depositAmount), // Convert to wei
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await axios.post("https://api.pinata.cloud/pinning/pinFileToIPFS", formData, {
+        headers: {
+          pinata_api_key: PINATA_KEY,
+          pinata_secret_api_key: SECRET_API,
+        },
       });
-      await tx.wait();
-      alert(`Deposited ${depositAmount} ETH successfully!`);
-      setDepositAmount("");
+      setFileUrl(`https://gateway.pinata.cloud/ipfs/${res.data.IpfsHash}`);
     } catch (error) {
-      console.error("Error depositing funds:", error);
+      console.log("Error uploading file to IPFS: ", error);
     }
-  };
+  }
 
-  // Get user balance
-  const getUserBalance = async () => {
-    if (!contract) return alert("Please connect wallet first!");
+  async function createNFT() {
+    const { name, description, price, category } = formInput;
+    if (!name || !description || !price || !fileUrl) return;
+    
+    const metadata = {
+      name,
+      description,
+      image: fileUrl,
+    };
+    
+    const metadataRes = await axios.post("https://api.pinata.cloud/pinning/pinJSONToIPFS", metadata, {
+      headers: {
+        pinata_api_key: PINATA_KEY,
+        pinata_secret_api_key: SECRET_API,
+      },
+    });
+    const metadataUrl = `https://gateway.pinata.cloud/ipfs/${metadataRes.data.IpfsHash}`;
+    await mintNFT(metadataUrl, ethers.utils.parseUnits(price, "ether"), category);
+  }
+
+  async function mintNFT(tokenURI, price, category) {
     try {
-      const balance = await contract.getBalance(account);
-      setUserBalance(ethers.formatEther(balance)); // Convert from wei to ETH
+      const provider = new ethers.providers.Web3Provider(window.ethereum);
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(contractAddress, NFTMarketPlace.abi, signer);
+  
+      const mintingPrice = ethers.utils.parseUnits("0.0000001", "ether");
+  
+      // Convert price to BigNumber
+      const priceValue = ethers.utils.parseUnits(price.toString(), "ether");
+  
+      // Convert category string to a number
+      const categoryMap = {
+        "Artwork": 0,
+        "Video": 1,
+        "GIF": 2
+      };
+      const categoryValue = categoryMap[category]; // Get the corresponding number
+  
+      const transaction = await contract.createToken(tokenURI, priceValue, categoryValue, { value: mintingPrice });
+      await transaction.wait();
+  
+      console.log("NFT Minted Successfully!");
+      alert("NFT successfully minted!");
     } catch (error) {
-      console.error("Error getting balance:", error);
+      console.log("Error minting NFT: ", error);
     }
-  };
-
-  useEffect(() => {
-    if (window.ethereum) {
-      initializeEthers();
-    }
-  }, []);
+  }
+  
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen">
-      <h1 className="text-2xl font-bold mb-4">GetSet Contract</h1>
-
-      {/* Wallet Connection */}
-      {account ? (
-        <p className="mb-4">Connected: {account}</p>
-      ) : (
-        <button 
-          onClick={initializeEthers} 
-          className="px-4 py-2 bg-blue-600 text-white rounded-md mb-4"
-        >
-          Connect Wallet
-        </button>
-      )}
-
-      {/* Input Field for Setting Value */}
-      <input
-        type="number"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="Enter value"
-        className="border px-4 py-2 mb-4"
-      />
-      <button 
-        onClick={setContractValue} 
-        className="px-4 py-2 bg-green-600 text-white rounded-md mb-4"
-      >
-        Set Value
-      </button>
-
-      {/* Get Value Button */}
-      <button 
-        onClick={getContractValue} 
-        className="px-4 py-2 bg-purple-600 text-white rounded-md mb-4"
-      >
-        Get Value
-      </button>
-
-      {/* Display Retrieved Value */}
-      {retrievedValue !== null && (
-        <p className="text-lg font-bold">Stored Value: {retrievedValue}</p>
-      )}
-
-      {/* Deposit Funds */}
-      <input
-        type="text"
-        value={depositAmount}
-        onChange={(e) => setDepositAmount(e.target.value)}
-        placeholder="Enter ETH to deposit"
-        className="border px-4 py-2 mb-4"
-      />
-      <button 
-        onClick={depositFunds} 
-        className="px-4 py-2 bg-yellow-600 text-white rounded-md mb-4"
-      >
-        Deposit Funds
-      </button>
-
-      {/* Get User Balance */}
-      <button 
-        onClick={getUserBalance} 
-        className="px-4 py-2 bg-red-600 text-white rounded-md mb-4"
-      >
-        Get Balance
-      </button>
-
-      {userBalance !== null && (
-        <p className="text-lg font-bold">Your Balance: {userBalance} ETH</p>
-      )}
+    <div>
+      <h2>Create NFT</h2>
+      <input placeholder="NFT Name" onChange={(e) => setFormInput({ ...formInput, name: e.target.value })} />
+      <textarea placeholder="NFT Description" onChange={(e) => setFormInput({ ...formInput, description: e.target.value })} />
+      <input type="number" placeholder="Price in ETH" onChange={(e) => setFormInput({ ...formInput, price: e.target.value })} />
+      <select onChange={(e) => setFormInput({ ...formInput, category: e.target.value })}>
+        <option value="Artwork">Artwork</option>
+        <option value="Video">Video</option>
+        <option value="GIF">GIF</option>
+      </select>
+      <input type="file" onChange={onChange} />
+      {fileUrl && <img src={fileUrl} alt="NFT preview" width="200px" />}
+      <button onClick={createNFT}>Create NFT</button>
     </div>
   );
 }
